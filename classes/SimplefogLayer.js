@@ -5,11 +5,12 @@
 
 import MaskLayer from './MaskLayer.js';
 import { Layout } from '../libs/hexagons.js';
-import { hexObjsToArr, hexToPercent } from '../js/helpers.js';
+import { hexObjsToArr, hexToPercent, simplefogLog } from '../js/helpers.js';
 
 export default class SimplefogLayer extends MaskLayer {
   constructor() {
     super('simplefog');
+
     // Register event listerenrs
     this._registerMouseListeners();
     this._registerKeyboardListeners();
@@ -17,6 +18,7 @@ export default class SimplefogLayer extends MaskLayer {
     this.DEFAULTS = Object.assign(this.DEFAULTS, {
       gmAlpha: 0.6,
       gmTint: '0x000000',
+      fogTextureFilePath: '',
       playerAlpha: 1,
       playerTint: '0x000000',
       transition: true,
@@ -35,15 +37,17 @@ export default class SimplefogLayer extends MaskLayer {
     // React to canvas zoom
     Hooks.on('canvasPan', (canvas, dimensions) => {
     // Scale blur filter radius to account for zooming
-      this.blur.blur = this.getSetting('blurRadius') * dimensions.scale;
+      //this.blur.blur = this.getSetting('blurRadius') * dimensions.scale;
     });
 
     // React to changes to current scene
     Hooks.on('updateScene', (scene, data) => this._updateScene(scene, data));
+
+    // Canvas expects the options.name property to be set
+    this.options = this.constructor.layerOptions;
   }
 
-  async init() {
-    this.maskInit();
+  init() {
     // Preview brush objects
     this.boxPreview = this.brush({
       shape: this.BRUSH_TYPES.BOX,
@@ -88,11 +92,7 @@ export default class SimplefogLayer extends MaskLayer {
       visible: false,
       zIndex: 15,
     });
-    // Add preview brushes to layer
-    this.addChild(this.boxPreview);
-    this.addChild(this.ellipsePreview);
-    this.addChild(this.polygonPreview);
-    this.addChild(this.polygonHandle);
+
 
     // Set default flags if they dont exist already
     Object.keys(this.DEFAULTS).forEach((key) => {
@@ -140,6 +140,14 @@ export default class SimplefogLayer extends MaskLayer {
     return alpha;
   }
 
+  async setFogTexture(fogTextureFilePath = this.getSetting('fogTextureFilePath')) {
+    if (!fogTextureFilePath) return;
+
+    const texture = await loadTexture(fogTextureFilePath);
+
+    this.fogSprite.texture = texture;
+  }
+
   /**
    * Sets the scene's alpha for the primary layer.
    * @param alpha {Number} 0-1 opacity representation
@@ -147,10 +155,12 @@ export default class SimplefogLayer extends MaskLayer {
    */
   async setAlpha(alpha, skip = false) {
   // If skip is false, do not transition and just set alpha immediately
-    if (skip || !this.getSetting('transition')) this.layer.alpha = alpha;
+    if (skip || !this.getSetting('transition')) {
+      this.alpha = alpha;
+    }
     // Loop until transition is complete
     else {
-      const start = this.layer.alpha;
+      const start = this.alpha;
       const dist = start - alpha;
       const fps = 60;
       const speed = this.getSetting('transitionSpeed');
@@ -161,11 +171,11 @@ export default class SimplefogLayer extends MaskLayer {
         // Delay 1 frame before updating again
         // eslint-disable-next-line no-await-in-loop
         await new Promise((resolve) => setTimeout(resolve, frame));
-        this.layer.alpha -= rate;
+        this.alpha -= rate;
         f -= 1;
       }
       // Reset target alpha in case loop overshot a bit
-      this.layer.alpha = alpha;
+      this.alpha = alpha;
     }
   }
 
@@ -194,14 +204,14 @@ export default class SimplefogLayer extends MaskLayer {
     // React to composite history change
     if (hasProperty(data, `flags.${this.layername}.history`)) {
       canvas[this.layername].renderStack(data.flags[this.layername].history);
-      canvas.sight.update();
+      canvas.sight.refresh();
     }
     // React to autoVisibility setting changes
     if (
       hasProperty(data, `flags.${this.layername}.autoVisibility`)
       || hasProperty(data, `flags.${this.layername}.vThreshold`)
     ) {
-      canvas.sight.update();
+      canvas.sight.refresh();
     }
     // React to alpha/tint changes
     if (!game.user.isGM && hasProperty(data, `flags.${this.layername}.playerAlpha`)) {
@@ -212,6 +222,11 @@ export default class SimplefogLayer extends MaskLayer {
     }
     if (!game.user.isGM && hasProperty(data, `flags.${this.layername}.playerTint`)) canvas[this.layername].setTint(data.flags[this.layername].playerTint);
     if (game.user.isGM && hasProperty(data, `flags.${this.layername}.gmTint`)) canvas[this.layername].setTint(data.flags[this.layername].gmTint);
+    // React to texture changes
+    if (hasProperty(data, `flags.${this.layername}.fogTextureFilePath`)) {
+      simplefogLog('has fogTextureFilePath')
+      canvas[this.layername].setFogTexture(data.flags[this.layername].fogTextureFilePath);
+    }
   }
 
   /**
@@ -677,5 +692,14 @@ export default class SimplefogLayer extends MaskLayer {
       default:
         break;
     }
+  }
+
+  async draw() {
+    super.draw();
+    this.init();
+    this.addChild(this.boxPreview);
+    this.addChild(this.ellipsePreview);
+    this.addChild(this.polygonPreview);
+    this.addChild(this.polygonHandle);
   }
 }

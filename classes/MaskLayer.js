@@ -5,7 +5,7 @@
  * and replaying the mask / undo etc.
  */
 
-import { simplefogLog } from '../js/helpers.js';
+import { simplefogLog } from "../js/helpers.js";
 
 export default class MaskLayer extends CanvasLayer {
   constructor(layername) {
@@ -31,6 +31,13 @@ export default class MaskLayer extends CanvasLayer {
     };
   }
 
+  static get layerOptions() {
+    //@ts-ignore
+    return mergeObject(super.layerOptions, {
+      zIndex: 220, // Above imageFog
+    });
+  }
+
   /* -------------------------------------------- */
   /*  Init                                        */
   /* -------------------------------------------- */
@@ -44,16 +51,17 @@ export default class MaskLayer extends CanvasLayer {
    * filters     - Holds filters such as blur applied to the layer
    * layer.mask  - PIXI Sprite wrapping the renderable mask
    * maskTexture - renderable texture that holds the actual mask data
+   * fogSprite   - PIXI Sprite that holds the image applied over the fog color
    */
-  async maskInit() {
+  maskInit() {
+    const d = canvas.dimensions;
     // Check if masklayer is flagged visible
-    let v = this.getSetting('visible');
+    let v = this.getSetting("visible");
     if (v === undefined) v = false;
     this.visible = v;
 
     // The layer is the primary sprite to be displayed
     this.layer = MaskLayer.getCanvasSprite();
-    this.addChild(this.layer);
     this.setTint(this.getTint());
     this.setAlpha(this.getAlpha(), true);
 
@@ -61,20 +69,33 @@ export default class MaskLayer extends CanvasLayer {
     this.blur = new PIXI.filters.BlurFilter();
     this.blur.padding = 0;
     this.blur.repeatEdgePixels = true;
-    this.blur.blur = this.getSetting('blurRadius');
-    this.blur.quality = this.getSetting('blurQuality');
-    this.filters = [this.blur];
+    this.blur.blur = this.getSetting("blurRadius");
+    this.blur.quality = this.getSetting("blurQuality");
+
+    //So you can hit escape on the keyboard and it will bring up the menu
+    this._controlled = {};
 
     this.maskTexture = MaskLayer.getMaskTexture();
-    this.layer.mask = new PIXI.Sprite(this.maskTexture);
-    this.addChild(this.layer.mask);
+    this.maskSprite = new PIXI.Sprite(this.maskTexture);
+
+    this.layer.mask = this.maskSprite;
     this.setFill();
+
+    this.layer.filters = [this.blur];
 
     // Allow zIndex prop to function for items on this layer
     this.sortableChildren = true;
 
     // Render initial history stack
     this.renderStack();
+
+    // apply Texture Sprite to fog layer after we renderStack to prevent revealing the map
+    this.fogSprite = new PIXI.Sprite();
+    this.fogSprite.position.set(d.sceneRect.x, d.sceneRect.y);
+    this.fogSprite.width = d.sceneRect.width;
+    this.fogSprite.height = d.sceneRect.height;
+    this.fogSprite.mask = this.maskSprite;
+    this.setFogTexture();
   }
 
   /* -------------------------------------------- */
@@ -84,8 +105,8 @@ export default class MaskLayer extends CanvasLayer {
   static getMaskTexture() {
     const d = canvas.dimensions;
     let res = 1.0;
-    if ((d.width * d.height) > (16000 ** 2)) res = 0.25;
-    else if ((d.width * d.height) > (8000 ** 2)) res = 0.5;
+    if (d.width * d.height > 16000 ** 2) res = 0.25;
+    else if (d.width * d.height > 8000 ** 2) res = 0.5;
 
     // Create the mask elements
     const tex = PIXI.RenderTexture.create({
@@ -131,12 +152,15 @@ export default class MaskLayer extends CanvasLayer {
    * @param start {Number}        The position in the history stack to stop rendering
    */
   renderStack(
-    history = canvas.scene.getFlag(this.layername, 'history'),
+    history = canvas.scene.getFlag(this.layername, "history"),
     start = this.pointer,
-    stop = canvas.scene.getFlag(this.layername, 'history.pointer'),
+    stop = canvas.scene.getFlag(this.layername, "history.pointer")
   ) {
-  // If history is blank, do nothing
-    if (history === undefined) return;
+    // If history is blank, do nothing
+    if (history === undefined) {
+      this.visible = this.getSetting("autoFog");
+      return;
+    }
     // If history is zero, reset scene fog
     if (history.events.length === 0) this.resetMask(false);
     if (start === undefined) start = 0;
@@ -159,18 +183,18 @@ export default class MaskLayer extends CanvasLayer {
     // Prevent calling update when no lights loaded
     if (!canvas.sight?.light?.los?.geometry) return;
     // Update sight layer
-    canvas.sight.update();
+    canvas.sight.refresh();
   }
 
   /**
    * Add buffered history stack to scene flag and clear buffer
    */
   async commitHistory() {
-  // Do nothing if no history to be committed, otherwise get history
+    // Do nothing if no history to be committed, otherwise get history
     if (this.historyBuffer.length === 0) return;
     if (this.lock) return;
     this.lock = true;
-    let history = canvas.scene.getFlag(this.layername, 'history');
+    let history = canvas.scene.getFlag(this.layername, "history");
     // If history storage doesnt exist, create it
     if (!history) {
       history = {
@@ -183,8 +207,8 @@ export default class MaskLayer extends CanvasLayer {
     // Push the new history buffer to the scene
     history.events.push(this.historyBuffer);
     history.pointer = history.events.length;
-    await canvas.scene.unsetFlag(this.layername, 'history');
-    await this.setSetting('history', history);
+    await canvas.scene.unsetFlag(this.layername, "history");
+    await this.setSetting("history", history);
     simplefogLog(`Pushed ${this.historyBuffer.length} updates.`);
     // Clear the history buffer
     this.historyBuffer = [];
@@ -196,12 +220,15 @@ export default class MaskLayer extends CanvasLayer {
    * @param save {Boolean} If true, also resets the layer history
    */
   async resetMask(save = true) {
-  // Fill fog layer with solid
+    // Fill fog layer with solid
     this.setFill();
     // If save, also unset history and reset pointer
     if (save) {
-      await canvas.scene.unsetFlag(this.layername, 'history');
-      await canvas.scene.setFlag(this.layername, 'history', { events: [], pointer: 0 });
+      await canvas.scene.unsetFlag(this.layername, "history");
+      await canvas.scene.setFlag(this.layername, "history", {
+        events: [],
+        pointer: 0,
+      });
       this.pointer = 0;
     }
   }
@@ -231,7 +258,7 @@ export default class MaskLayer extends CanvasLayer {
     simplefogLog(`Undoing ${steps} steps.`);
     // Grab existing history
     // Todo: this could probably just grab and set the pointer for a slight performance improvement
-    let history = canvas.scene.getFlag(this.layername, 'history');
+    let history = canvas.scene.getFlag(this.layername, "history");
     if (!history) {
       history = {
         events: [],
@@ -242,8 +269,8 @@ export default class MaskLayer extends CanvasLayer {
     if (newpointer < 0) newpointer = 0;
     // Set new pointer & update history
     history.pointer = newpointer;
-    await canvas.scene.unsetFlag(this.layername, 'history');
-    await canvas.scene.setFlag(this.layername, 'history', history);
+    await canvas.scene.unsetFlag(this.layername, "history");
+    await canvas.scene.setFlag(this.layername, "history", history);
   }
 
   /* -------------------------------------------- */
@@ -268,9 +295,9 @@ export default class MaskLayer extends CanvasLayer {
    * });
    */
   brush(data) {
-  // Get new graphic & begin filling
-    const alpha = (typeof data.alpha === 'undefined') ? 1 : data.alpha;
-    const visible = (typeof data.visible === 'undefined') ? true : data.visible;
+    // Get new graphic & begin filling
+    const alpha = typeof data.alpha === "undefined" ? 1 : data.alpha;
+    const visible = typeof data.visible === "undefined" ? true : data.visible;
     const brush = new PIXI.Graphics();
     brush.beginFill(data.fill);
     // Draw the shape depending on type of brush
@@ -339,7 +366,7 @@ export default class MaskLayer extends CanvasLayer {
    */
   setFill() {
     const fill = new PIXI.Graphics();
-    fill.beginFill(0xFFFFFF);
+    fill.beginFill(0xffffff);
     fill.drawRect(0, 0, canvas.dimensions.width, canvas.dimensions.height);
     fill.endFill();
     this.composite(fill);
@@ -350,9 +377,17 @@ export default class MaskLayer extends CanvasLayer {
    * Toggles visibility of primary layer
    */
   toggle() {
-    const v = this.getSetting('visible');
+    const v = this.getSetting("visible");
     this.visible = !v;
-    this.setSetting('visible', !v);
+    this.setSetting("visible", !v);
+
+    //If first time, set autofog to opposite so it doesn't reapply it.
+    let history = canvas.scene.getFlag(this.layername, "history");
+
+    if (history === undefined) {
+      this.setSetting("autoFog", !v);
+      return;
+    }
   }
 
   /**
@@ -373,5 +408,9 @@ export default class MaskLayer extends CanvasLayer {
 
   async draw() {
     super.draw();
+    this.maskInit();
+    this.addChild(this.layer);
+    this.addChild(this.layer.mask);
+    this.addChild(this.fogSprite);
   }
 }

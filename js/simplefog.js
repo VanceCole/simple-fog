@@ -15,13 +15,14 @@ Hooks.once('init', () => {
 });
 
 Hooks.once('canvasInit', () => {
-  // Add SimplefogLayer to canvas
-  const layerct = canvas.stage.children.length;
-  canvas.simplefog = canvas.stage.addChildAt(new SimplefogLayer(), layerct);
-});
+  canvas.simplefog = new SimplefogLayer();
+  canvas.stage.addChild(canvas.simplefog);
 
-Hooks.on('canvasInit', () => {
-  canvas.simplefog.init();
+  let theLayers = Canvas.layers;
+  theLayers.simplefog = SimplefogLayer;
+  Object.defineProperty(Canvas, 'layers', {get: function() {
+      return theLayers
+  }})
 });
 
 /*
@@ -30,21 +31,7 @@ Hooks.on('canvasInit', () => {
 Hooks.once('ready', () => {
   // Check if any migrations need to be performed
   SimplefogMigrations.check();
-  // Monkeypatch SightLayer to check simplefog vision on updates
-  if (game.data.version.startsWith('0.6')) {
-    const origUpdate = canvas.sight.update;
-    canvas.sight.update = function update(...args) {
-      origUpdate.call(this, ...args);
-      sightLayerUpdate();
-    };
-    canvas.sight.update();
-  }
-  else {
-    const origUpdate = canvas.sight.refresh;
-    canvas.sight.refresh = function refresh(...args) {
-      origUpdate.call(this, ...args);
-      sightLayerUpdate();
-    };
-    canvas.sight.refresh();
-  }
+
+  //ooks.on('sightRefresh', sightLayerUpdate);
+  canvas.sight.refresh();
 });
